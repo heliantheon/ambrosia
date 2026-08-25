@@ -170,7 +170,7 @@ func (h *Handler) getRandomRecipes(count int) []dto.RecipeListItem {
 		})
 	}
 
-	rand.Shuffle(len(items), func(i, j int) {
+	rand.Shuffle(len(items), func(i, j int) { //nolint:gosec // Recommendation ordering is not security-sensitive.
 		items[i], items[j] = items[j], items[i]
 	})
 
