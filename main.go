@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,7 @@ import (
 	ambrosia "github.com/heliantheon/ambrosia/internal"
 	"github.com/heliantheon/common/config"
 	"github.com/heliantheon/common/logger"
+	"github.com/heliantheon/common/observability"
 )
 
 // @title Helios API
@@ -29,6 +31,11 @@ func main() {
 		Debug:  config.IsDebug(),
 	})
 	defer logger.Sync()
+	shutdownTracing, err := observability.Init(context.Background(), observability.Config{ServiceName: "ambrosia"})
+	if err != nil {
+		logger.Warnf("初始化 OpenTelemetry 失败，链路追踪保持降级: %v", err)
+	}
+	defer shutdownTracing()
 	if err := ambrosiaconfig.Validate(); err != nil {
 		logger.Fatalf("Ambrosia 配置校验失败: %v", err)
 	}
@@ -44,7 +51,9 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(observability.GinMiddleware("ambrosia")...)
+	r.Use(gin.Recovery())
 	r.RedirectTrailingSlash = false
 
 	r.GET("/health", func(c *gin.Context) {
