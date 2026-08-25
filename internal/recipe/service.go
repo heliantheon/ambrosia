@@ -144,13 +144,14 @@ func NewService(db *gorm.DB) (*Service, error) {
 }
 
 // CreateRecipe 创建菜谱
-func (s *Service) CreateRecipe(recipe *models.Recipe, ingredients []models.Ingredient, steps []models.Step, notes []string) error {
+func (s *Service) CreateRecipe(ctx context.Context, recipe *models.Recipe, ingredients []models.Ingredient, steps []models.Step, notes []string) error {
+	db := s.db.WithContext(ctx)
 	var existing models.Recipe
-	if err := s.db.First(&existing, "recipe_id = ?", recipe.RecipeID).Error; err == nil {
+	if err := db.First(&existing, "recipe_id = ?", recipe.RecipeID).Error; err == nil {
 		return fmt.Errorf("菜谱 ID '%s' 已存在", recipe.RecipeID)
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(recipe).Error; err != nil {
 			return err
 		}
@@ -168,9 +169,9 @@ func (s *Service) CreateRecipe(recipe *models.Recipe, ingredients []models.Ingre
 }
 
 // GetRecipe 根据 ID 获取菜谱
-func (s *Service) GetRecipe(id string) (*models.Recipe, error) {
+func (s *Service) GetRecipe(ctx context.Context, id string) (*models.Recipe, error) {
 	var recipe models.Recipe
-	err := s.db.
+	err := s.db.WithContext(ctx).
 		Preload("Ingredients").
 		Preload("Steps", func(db *gorm.DB) *gorm.DB {
 			return db.Order("step ASC")
@@ -186,7 +187,7 @@ func (s *Service) GetRecipe(id string) (*models.Recipe, error) {
 	}
 
 	// 填充标签失败不影响主流程
-	if err := s.fillTagsForOne(&recipe); err != nil {
+	if err := s.fillTagsForOne(ctx, &recipe); err != nil {
 		logger.Errorf("[Recipe] 填充标签失败 (recipe_id=%s): %v", recipe.RecipeID, err)
 	}
 
@@ -194,8 +195,8 @@ func (s *Service) GetRecipe(id string) (*models.Recipe, error) {
 }
 
 // GetRecipes 获取菜谱列表
-func (s *Service) GetRecipes(category, search string, limit, offset int) ([]models.Recipe, error) {
-	query := s.db.Model(&models.Recipe{})
+func (s *Service) GetRecipes(ctx context.Context, category, search string, limit, offset int) ([]models.Recipe, error) {
+	query := s.db.WithContext(ctx).Model(&models.Recipe{})
 
 	if category != "" {
 		query = query.Where("category = ?", category)
@@ -217,7 +218,7 @@ func (s *Service) GetRecipes(category, search string, limit, offset int) ([]mode
 	}
 
 	// 填充标签失败不影响主流程
-	if err := s.fillTags(recipes); err != nil {
+	if err := s.fillTags(ctx, recipes); err != nil {
 		logger.Errorf("[Recipe] 批量填充标签失败: %v", err)
 	}
 
@@ -231,9 +232,10 @@ type FavoriteCount struct {
 }
 
 // GetHotRecipes 获取热门菜谱（按收藏数排序）
-func (s *Service) GetHotRecipes(limit int, excludeIDs []string) ([]models.Recipe, error) {
+func (s *Service) GetHotRecipes(ctx context.Context, limit int, excludeIDs []string) ([]models.Recipe, error) {
+	db := s.db.WithContext(ctx)
 	var counts []FavoriteCount
-	countQuery := s.db.Model(&models.Favorite{}).
+	countQuery := db.Model(&models.Favorite{}).
 		Select("recipe_id, COUNT(*) as count").
 		Group("recipe_id").
 		Order("count DESC")
@@ -267,7 +269,7 @@ func (s *Service) GetHotRecipes(limit int, excludeIDs []string) ([]models.Recipe
 	}
 
 	var recipes []models.Recipe
-	if err := s.db.Where("recipe_id IN ?", recipeIDs).Find(&recipes).Error; err != nil {
+	if err := db.Where("recipe_id IN ?", recipeIDs).Find(&recipes).Error; err != nil {
 		return nil, err
 	}
 
@@ -284,7 +286,7 @@ func (s *Service) GetHotRecipes(limit int, excludeIDs []string) ([]models.Recipe
 	}
 
 	// 填充标签失败不影响主流程
-	if err := s.fillTags(result); err != nil {
+	if err := s.fillTags(ctx, result); err != nil {
 		logger.Errorf("[Recipe] 批量填充标签失败: %v", err)
 	}
 
@@ -292,16 +294,17 @@ func (s *Service) GetHotRecipes(limit int, excludeIDs []string) ([]models.Recipe
 }
 
 // UpdateRecipe 更新菜谱
-func (s *Service) UpdateRecipe(id string, updates map[string]interface{}, ingredients []models.Ingredient, steps []models.Step, notes []string, updateIngredients, updateSteps, updateNotes bool) (*models.Recipe, error) {
+func (s *Service) UpdateRecipe(ctx context.Context, id string, updates map[string]interface{}, ingredients []models.Ingredient, steps []models.Step, notes []string, updateIngredients, updateSteps, updateNotes bool) (*models.Recipe, error) {
+	db := s.db.WithContext(ctx)
 	var recipe models.Recipe
-	if err := s.db.First(&recipe, "recipe_id = ?", id).Error; err != nil {
+	if err := db.First(&recipe, "recipe_id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("菜谱 ID '%s' 不存在", id)
 		}
 		return nil, err
 	}
 
-	return &recipe, s.db.Transaction(func(tx *gorm.DB) error {
+	return &recipe, db.Transaction(func(tx *gorm.DB) error {
 		if err := s.applyUpdates(tx, &recipe, updates); err != nil {
 			return err
 		}
@@ -329,20 +332,21 @@ func (s *Service) UpdateRecipe(id string, updates map[string]interface{}, ingred
 }
 
 // DeleteRecipe 删除菜谱
-func (s *Service) DeleteRecipe(id string) error {
+func (s *Service) DeleteRecipe(ctx context.Context, id string) error {
+	db := s.db.WithContext(ctx)
 	var recipe models.Recipe
-	if err := s.db.First(&recipe, "recipe_id = ?", id).Error; err != nil {
+	if err := db.First(&recipe, "recipe_id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("菜谱 ID '%s' 不存在", id)
 		}
 		return err
 	}
 
-	return s.db.Delete(&recipe).Error
+	return db.Delete(&recipe).Error
 }
 
 // GetCategories 获取所有分类（从缓存获取，缓存未命中时查询数据库）
-func (s *Service) GetCategories() ([]string, error) {
+func (s *Service) GetCategories(ctx context.Context) ([]string, error) {
 	// 尝试从缓存获取
 	if cached, found := s.categoriesCache.Get(categoriesCacheKey); found {
 		if categories, ok := cached.([]string); ok {
@@ -352,7 +356,7 @@ func (s *Service) GetCategories() ([]string, error) {
 
 	// 缓存未命中，查询数据库
 	var categories []string
-	err := s.db.Model(&models.Recipe{}).
+	err := s.db.WithContext(ctx).Model(&models.Recipe{}).
 		Distinct("category").
 		Where("category IS NOT NULL AND category != ''").
 		Pluck("category", &categories).Error
@@ -366,14 +370,14 @@ func (s *Service) GetCategories() ([]string, error) {
 }
 
 // GetCategoriesWithCount 获取所有分类及其数量
-func (s *Service) GetCategoriesWithCount() (map[string]int64, error) {
+func (s *Service) GetCategoriesWithCount(ctx context.Context) (map[string]int64, error) {
 	type Result struct {
 		Category string
 		Count    int64
 	}
 
 	var results []Result
-	err := s.db.Model(&models.Recipe{}).
+	err := s.db.WithContext(ctx).Model(&models.Recipe{}).
 		Select("category, COUNT(*) as count").
 		Where("category IS NOT NULL AND category != ''").
 		Group("category").
@@ -391,7 +395,7 @@ func (s *Service) GetCategoriesWithCount() (map[string]int64, error) {
 }
 
 // CreateRecipesBatch 批量创建菜谱
-func (s *Service) CreateRecipesBatch(recipes []models.Recipe, ingredientsList [][]models.Ingredient, stepsList [][]models.Step, notesList [][]string) ([]models.Recipe, error) {
+func (s *Service) CreateRecipesBatch(ctx context.Context, recipes []models.Recipe, ingredientsList [][]models.Ingredient, stepsList [][]models.Step, notesList [][]string) ([]models.Recipe, error) {
 	var created []models.Recipe
 
 	for i := range recipes {
@@ -409,7 +413,7 @@ func (s *Service) CreateRecipesBatch(recipes []models.Recipe, ingredientsList []
 			notes = notesList[i]
 		}
 
-		if err := s.CreateRecipe(&recipes[i], ingredients, steps, notes); err != nil {
+		if err := s.CreateRecipe(ctx, &recipes[i], ingredients, steps, notes); err != nil {
 			continue
 		}
 		created = append(created, recipes[i])
@@ -492,7 +496,7 @@ func (s *Service) reloadRecipe(tx *gorm.DB, recipe *models.Recipe, id string) er
 		First(recipe, "recipe_id = ?", id).Error
 }
 
-func (s *Service) fillTags(recipes []models.Recipe) error {
+func (s *Service) fillTags(ctx context.Context, recipes []models.Recipe) error {
 	if len(recipes) == 0 {
 		return nil
 	}
@@ -504,7 +508,8 @@ func (s *Service) fillTags(recipes []models.Recipe) error {
 
 	// 1. 查询关联表（不 JOIN，避免连表查询）
 	var recipeTags []models.RecipeTag
-	if err := s.db.Where("recipe_id IN ?", recipeIDs).Find(&recipeTags).Error; err != nil {
+	db := s.db.WithContext(ctx)
+	if err := db.Where("recipe_id IN ?", recipeIDs).Find(&recipeTags).Error; err != nil {
 		return err
 	}
 
@@ -522,7 +527,7 @@ func (s *Service) fillTags(recipes []models.Recipe) error {
 	// 3. 按 recipe_id 分组组装（从缓存获取标签定义）
 	recipeTagsMap := make(map[string][]models.Tag)
 	for _, rt := range recipeTags {
-		tag, err := tagCache.Get(rt.TagType, rt.TagValue, s.db)
+		tag, err := tagCache.Get(rt.TagType, rt.TagValue, db)
 		if err == nil {
 			recipeTagsMap[rt.RecipeID] = append(recipeTagsMap[rt.RecipeID], *tag)
 		}
@@ -540,12 +545,12 @@ func (s *Service) fillTags(recipes []models.Recipe) error {
 	return nil
 }
 
-func (s *Service) fillTagsForOne(recipe *models.Recipe) error {
+func (s *Service) fillTagsForOne(ctx context.Context, recipe *models.Recipe) error {
 	if recipe == nil {
 		return nil
 	}
 	recipes := []models.Recipe{*recipe}
-	if err := s.fillTags(recipes); err != nil {
+	if err := s.fillTags(ctx, recipes); err != nil {
 		return err
 	}
 	recipe.Tags = recipes[0].Tags

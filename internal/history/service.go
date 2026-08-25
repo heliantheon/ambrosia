@@ -1,6 +1,7 @@
 package history
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -20,9 +21,10 @@ func NewService(db *gorm.DB) *Service {
 }
 
 // AddViewHistory 添加浏览记录（如果已存在则更新浏览时间）
-func (s *Service) AddViewHistory(openID, recipeID string) (*models.ViewHistory, error) {
+func (s *Service) AddViewHistory(ctx context.Context, openID, recipeID string) (*models.ViewHistory, error) {
+	db := s.db.WithContext(ctx)
 	var recipe models.Recipe
-	if err := s.db.First(&recipe, "recipe_id = ?", recipeID).Error; err != nil {
+	if err := db.First(&recipe, "recipe_id = ?", recipeID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("菜谱不存在")
 		}
@@ -30,7 +32,7 @@ func (s *Service) AddViewHistory(openID, recipeID string) (*models.ViewHistory, 
 	}
 
 	var existing models.ViewHistory
-	err := s.db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).
+	err := db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).
 		Order("viewed_at DESC").
 		First(&existing).Error
 
@@ -43,7 +45,7 @@ func (s *Service) AddViewHistory(openID, recipeID string) (*models.ViewHistory, 
 			// 24 小时内，更新浏览时间和更新时间
 			existing.ViewedAt = now
 			existing.UpdatedAt = now
-			if err := s.db.Save(&existing).Error; err != nil {
+			if err := db.Save(&existing).Error; err != nil {
 				return nil, err
 			}
 			return &existing, nil
@@ -65,7 +67,7 @@ func (s *Service) AddViewHistory(openID, recipeID string) (*models.ViewHistory, 
 		UpdatedAt: now,
 	}
 
-	if err := s.db.Create(&history).Error; err != nil {
+	if err := db.Create(&history).Error; err != nil {
 		return nil, err
 	}
 
@@ -73,8 +75,8 @@ func (s *Service) AddViewHistory(openID, recipeID string) (*models.ViewHistory, 
 }
 
 // RemoveViewHistory 删除浏览记录
-func (s *Service) RemoveViewHistory(openID, recipeID string) error {
-	result := s.db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).Delete(&models.ViewHistory{})
+func (s *Service) RemoveViewHistory(ctx context.Context, openID, recipeID string) error {
+	result := s.db.WithContext(ctx).Where("user_id = ? AND recipe_id = ?", openID, recipeID).Delete(&models.ViewHistory{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -82,8 +84,8 @@ func (s *Service) RemoveViewHistory(openID, recipeID string) error {
 }
 
 // ClearViewHistory 清空用户的所有浏览记录
-func (s *Service) ClearViewHistory(openID string) error {
-	result := s.db.Where("user_id = ?", openID).Delete(&models.ViewHistory{})
+func (s *Service) ClearViewHistory(ctx context.Context, openID string) error {
+	result := s.db.WithContext(ctx).Where("user_id = ?", openID).Delete(&models.ViewHistory{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -91,8 +93,8 @@ func (s *Service) ClearViewHistory(openID string) error {
 }
 
 // GetViewHistory 获取浏览历史列表（数据库层过滤+分页）
-func (s *Service) GetViewHistory(openID, category, search string, limit, offset int) ([]models.ViewHistory, int64, error) {
-	query := s.db.Model(&models.ViewHistory{}).
+func (s *Service) GetViewHistory(ctx context.Context, openID, category, search string, limit, offset int) ([]models.ViewHistory, int64, error) {
+	query := s.db.WithContext(ctx).Model(&models.ViewHistory{}).
 		Joins("JOIN recipes ON recipes.recipe_id = view_histories.recipe_id").
 		Where("view_histories.user_id = ?", openID)
 

@@ -1,6 +1,7 @@
 package home
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -62,7 +63,7 @@ func (h *Handler) GetRecommendRecipes(c *gin.Context) {
 		limit = 20
 	}
 
-	recipes := h.getRandomRecipes(limit)
+	recipes := h.getRandomRecipes(c.Request.Context(), limit)
 	c.JSON(http.StatusOK, recipes)
 }
 
@@ -81,7 +82,7 @@ func (h *Handler) GetHotRecipes(c *gin.Context) {
 		limit = 20
 	}
 
-	recipes := h.getHotRecipes(limit)
+	recipes := h.getHotRecipes(c.Request.Context(), limit)
 	c.JSON(http.StatusOK, recipes)
 }
 
@@ -127,8 +128,8 @@ func (h *Handler) loadBannersFromConfig() []BannerItem {
 	return banners
 }
 
-func (h *Handler) getHotRecipes(count int) []dto.RecipeListItem {
-	recipes, err := h.recipeService.GetHotRecipes(count, nil)
+func (h *Handler) getHotRecipes(ctx context.Context, count int) []dto.RecipeListItem {
+	recipes, err := h.recipeService.GetHotRecipes(ctx, count, nil)
 	if err != nil || len(recipes) == 0 {
 		return []dto.RecipeListItem{}
 	}
@@ -150,8 +151,8 @@ func (h *Handler) getHotRecipes(count int) []dto.RecipeListItem {
 	return items
 }
 
-func (h *Handler) getRandomRecipes(count int) []dto.RecipeListItem {
-	recipes, err := h.recipeService.GetRecipes("", "", 100, 0)
+func (h *Handler) getRandomRecipes(ctx context.Context, count int) []dto.RecipeListItem {
+	recipes, err := h.recipeService.GetRecipes(ctx, "", "", 100, 0)
 	if err != nil || len(recipes) == 0 {
 		return []dto.RecipeListItem{}
 	}

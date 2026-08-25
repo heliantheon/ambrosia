@@ -1,6 +1,7 @@
 package favorite
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -20,9 +21,10 @@ func NewService(db *gorm.DB) *Service {
 }
 
 // AddFavorite 添加收藏
-func (s *Service) AddFavorite(openID, recipeID string) (*models.Favorite, error) {
+func (s *Service) AddFavorite(ctx context.Context, openID, recipeID string) (*models.Favorite, error) {
+	db := s.db.WithContext(ctx)
 	var recipe models.Recipe
-	if err := s.db.First(&recipe, "recipe_id = ?", recipeID).Error; err != nil {
+	if err := db.First(&recipe, "recipe_id = ?", recipeID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("菜谱不存在")
 		}
@@ -30,7 +32,7 @@ func (s *Service) AddFavorite(openID, recipeID string) (*models.Favorite, error)
 	}
 
 	var existing models.Favorite
-	err := s.db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).First(&existing).Error
+	err := db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).First(&existing).Error
 	if err == nil {
 		return &existing, nil
 	}
@@ -44,7 +46,7 @@ func (s *Service) AddFavorite(openID, recipeID string) (*models.Favorite, error)
 		CreatedAt: time.Now(),
 	}
 
-	if err := s.db.Create(&favorite).Error; err != nil {
+	if err := db.Create(&favorite).Error; err != nil {
 		return nil, err
 	}
 
@@ -52,8 +54,8 @@ func (s *Service) AddFavorite(openID, recipeID string) (*models.Favorite, error)
 }
 
 // RemoveFavorite 取消收藏
-func (s *Service) RemoveFavorite(openID, recipeID string) error {
-	result := s.db.Where("user_id = ? AND recipe_id = ?", openID, recipeID).Delete(&models.Favorite{})
+func (s *Service) RemoveFavorite(ctx context.Context, openID, recipeID string) error {
+	result := s.db.WithContext(ctx).Where("user_id = ? AND recipe_id = ?", openID, recipeID).Delete(&models.Favorite{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -61,9 +63,9 @@ func (s *Service) RemoveFavorite(openID, recipeID string) error {
 }
 
 // IsFavorite 检查是否已收藏
-func (s *Service) IsFavorite(openID, recipeID string) (bool, error) {
+func (s *Service) IsFavorite(ctx context.Context, openID, recipeID string) (bool, error) {
 	var count int64
-	err := s.db.Model(&models.Favorite{}).Where("user_id = ? AND recipe_id = ?", openID, recipeID).Count(&count).Error
+	err := s.db.WithContext(ctx).Model(&models.Favorite{}).Where("user_id = ? AND recipe_id = ?", openID, recipeID).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
@@ -71,8 +73,8 @@ func (s *Service) IsFavorite(openID, recipeID string) (bool, error) {
 }
 
 // GetFavorites 获取收藏列表（数据库层过滤+分页）
-func (s *Service) GetFavorites(openID, category, search string, limit, offset int) ([]models.Favorite, int64, error) {
-	query := s.db.Model(&models.Favorite{}).
+func (s *Service) GetFavorites(ctx context.Context, openID, category, search string, limit, offset int) ([]models.Favorite, int64, error) {
+	query := s.db.WithContext(ctx).Model(&models.Favorite{}).
 		Joins("JOIN recipes ON recipes.recipe_id = favorites.recipe_id").
 		Where("favorites.user_id = ?", openID)
 
@@ -104,9 +106,9 @@ func (s *Service) GetFavorites(openID, category, search string, limit, offset in
 }
 
 // GetFavoriteRecipeIDs 批量检查收藏状态
-func (s *Service) GetFavoriteRecipeIDs(openID string, recipeIDs []string) ([]string, error) {
+func (s *Service) GetFavoriteRecipeIDs(ctx context.Context, openID string, recipeIDs []string) ([]string, error) {
 	var favorites []models.Favorite
-	err := s.db.Select("recipe_id").
+	err := s.db.WithContext(ctx).Select("recipe_id").
 		Where("user_id = ? AND recipe_id IN ?", openID, recipeIDs).
 		Find(&favorites).Error
 

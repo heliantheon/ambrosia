@@ -1,6 +1,7 @@
 package preference
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -30,7 +31,7 @@ func (s *Service) GetDB() *gorm.DB {
 }
 
 // GetOptions 获取所有偏好选项（从缓存索引获取，性能最优）
-func (s *Service) GetOptions() (*OptionsResponse, error) {
+func (s *Service) GetOptions(ctx context.Context) (*OptionsResponse, error) {
 	var flavors, taboos, allergies []models.Tag
 	var flavorsErr, taboosErr, allergiesErr error
 	var wg sync.WaitGroup
@@ -40,17 +41,17 @@ func (s *Service) GetOptions() (*OptionsResponse, error) {
 
 	go func() {
 		defer wg.Done()
-		flavors, flavorsErr = s.tagService.GetTagsByType(models.TagTypeFlavor)
+		flavors, flavorsErr = s.tagService.GetTagsByType(ctx, models.TagTypeFlavor)
 	}()
 
 	go func() {
 		defer wg.Done()
-		taboos, taboosErr = s.tagService.GetTagsByType(models.TagTypeTaboo)
+		taboos, taboosErr = s.tagService.GetTagsByType(ctx, models.TagTypeTaboo)
 	}()
 
 	go func() {
 		defer wg.Done()
-		allergies, allergiesErr = s.tagService.GetTagsByType(models.TagTypeAllergy)
+		allergies, allergiesErr = s.tagService.GetTagsByType(ctx, models.TagTypeAllergy)
 	}()
 
 	wg.Wait()
@@ -74,16 +75,16 @@ func (s *Service) GetOptions() (*OptionsResponse, error) {
 }
 
 // GetUserPreferences 获取用户偏好（包含已选择的选项）
-func (s *Service) GetUserPreferences(openid string) (*UserPreferencesResponse, error) {
+func (s *Service) GetUserPreferences(ctx context.Context, openid string) (*UserPreferencesResponse, error) {
 	// 获取所有选项
-	options, err := s.GetOptions()
+	options, err := s.GetOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// 获取用户已选择的偏好
 	var userPrefs []models.UserPreference
-	if err := s.db.Where("user_id = ?", openid).Find(&userPrefs).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("user_id = ?", openid).Find(&userPrefs).Error; err != nil {
 		return nil, err
 	}
 
@@ -130,9 +131,9 @@ type OptionItemWithSelected struct {
 }
 
 // UpdateUserPreferences 更新用户偏好（全量替换）
-func (s *Service) UpdateUserPreferences(openid string, req *UpdatePreferencesRequest) (err error) {
+func (s *Service) UpdateUserPreferences(ctx context.Context, openid string, req *UpdatePreferencesRequest) (err error) {
 	// 开始事务
-	tx := s.db.Begin()
+	tx := s.db.WithContext(ctx).Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -214,13 +215,13 @@ func convertTagsToOptions(tags []models.Tag) []OptionItem {
 }
 
 // validateTagValues 验证标签值是否存在
-func validateTagValues(values []string, tagType models.TagType, tagService *tag.Service) error {
+func validateTagValues(ctx context.Context, values []string, tagType models.TagType, tagService *tag.Service) error {
 	if len(values) == 0 {
 		return nil
 	}
 
 	// 获取该类型的所有标签
-	tags, err := tagService.GetTagsByType(tagType)
+	tags, err := tagService.GetTagsByType(ctx, tagType)
 	if err != nil {
 		return err
 	}
@@ -252,19 +253,19 @@ type UpdatePreferencesRequest struct {
 }
 
 // Validate 验证请求数据（需要传入 tagService）
-func (r *UpdatePreferencesRequest) Validate(tagService *tag.Service) error {
+func (r *UpdatePreferencesRequest) Validate(ctx context.Context, tagService *tag.Service) error {
 	// 验证口味选项是否存在
-	if err := validateTagValues(r.Flavors, models.TagTypeFlavor, tagService); err != nil {
+	if err := validateTagValues(ctx, r.Flavors, models.TagTypeFlavor, tagService); err != nil {
 		return err
 	}
 
 	// 验证忌口选项是否存在
-	if err := validateTagValues(r.Taboos, models.TagTypeTaboo, tagService); err != nil {
+	if err := validateTagValues(ctx, r.Taboos, models.TagTypeTaboo, tagService); err != nil {
 		return err
 	}
 
 	// 验证过敏选项是否存在
-	return validateTagValues(r.Allergies, models.TagTypeAllergy, tagService)
+	return validateTagValues(ctx, r.Allergies, models.TagTypeAllergy, tagService)
 }
 
 // InvalidTagValueError 无效标签值错误
