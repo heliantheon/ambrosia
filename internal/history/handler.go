@@ -62,7 +62,7 @@ func (h *Handler) AddViewHistory(c *gin.Context) {
 		return
 	}
 
-	hist, err := h.service.AddViewHistory(openID, req.RecipeID)
+	hist, err := h.service.AddViewHistory(c.Request.Context(), openID, req.RecipeID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -85,7 +85,7 @@ func (h *Handler) RemoveViewHistory(c *gin.Context) {
 	openID := guard.GetTokenContext(c.Request.Context()).AccessToken.OpenID()
 	recipeID := c.Param("recipe_id")
 
-	if err := h.service.RemoveViewHistory(openID, recipeID); err != nil {
+	if err := h.service.RemoveViewHistory(c.Request.Context(), openID, recipeID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handler) RemoveViewHistory(c *gin.Context) {
 func (h *Handler) ClearViewHistory(c *gin.Context) {
 	openID := guard.GetTokenContext(c.Request.Context()).AccessToken.OpenID()
 
-	if err := h.service.ClearViewHistory(openID); err != nil {
+	if err := h.service.ClearViewHistory(c.Request.Context(), openID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -139,7 +139,7 @@ func (h *Handler) GetViewHistory(c *gin.Context) {
 		offset = 0
 	}
 
-	historyList, total, err := h.service.GetViewHistory(openID, category, search, limit, offset)
+	historyList, total, err := h.service.GetViewHistory(c.Request.Context(), openID, category, search, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

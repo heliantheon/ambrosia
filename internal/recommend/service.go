@@ -135,7 +135,7 @@ func (s *Service) GetContext(req *ContextRequest) *ContextResponse {
 }
 
 // GetRecommendations 获取推荐菜谱（基于 LLM）
-func (s *Service) GetRecommendations(ctx *Context, limit int) (*Result, error) {
+func (s *Service) GetRecommendations(requestCtx context.Context, ctx *Context, limit int) (*Result, error) {
 	result := &Result{}
 
 	// 1. 获取天气信息
@@ -161,14 +161,14 @@ func (s *Service) GetRecommendations(ctx *Context, limit int) (*Result, error) {
 	// 3. 获取用户历史（如果有用户 ID）
 	var userHistory *UserHistory
 	if ctx.UserID != "" {
-		userHistory, err = s.getUserHistory(ctx.UserID)
+		userHistory, err = s.getUserHistory(requestCtx, ctx.UserID)
 		if err != nil {
 			logger.Warnf("获取用户历史失败: %v", err)
 		}
 	}
 
 	// 4. 使用 LLM 生成推荐
-	llmResult, err := s.getLLMRecommendations(recCtx, userHistory, limit, ctx.ExcludeIDs)
+	llmResult, err := s.getLLMRecommendations(requestCtx, recCtx, userHistory, limit, ctx.ExcludeIDs)
 	if err != nil {
 		logger.Errorf("[Recommend] LLM 推荐失败: %v, 错误详情: %+v", err, err)
 		return nil, fmt.Errorf("LLM 推荐失败: %w", err)
@@ -184,7 +184,7 @@ func (s *Service) GetRecommendations(ctx *Context, limit int) (*Result, error) {
 
 	logger.Infof("[Recommend] LLM 推荐的菜谱 ID: %v", recipeIDs)
 
-	recipes, err := s.queryRecipesByIDs(recipeIDs)
+	recipes, err := s.queryRecipesByIDs(requestCtx, recipeIDs)
 	if err != nil {
 		logger.Errorf("查询菜谱失败: %v", err)
 		return nil, fmt.Errorf("查询菜谱失败: %w", err)
@@ -193,7 +193,7 @@ func (s *Service) GetRecommendations(ctx *Context, limit int) (*Result, error) {
 	logger.Infof("[Recommend] 数据库查询到的菜谱数量: %d", len(recipes))
 
 	// 6. 填充标签信息
-	if err := s.fillTags(recipes); err != nil {
+	if err := s.fillTags(requestCtx, recipes); err != nil {
 		logger.Warnf("填充标签失败: %v", err)
 	}
 
@@ -225,7 +225,8 @@ func (s *Service) GetRecommendations(ctx *Context, limit int) (*Result, error) {
 }
 
 // getUserHistory 获取用户历史
-func (s *Service) getUserHistory(userID string) (*UserHistory, error) {
+func (s *Service) getUserHistory(ctx context.Context, userID string) (*UserHistory, error) {
+	db := s.db.WithContext(ctx)
 	history := &UserHistory{
 		FavoriteRecipes: []RecipeInfo{},
 		ViewedRecipes:   []RecipeInfo{},
@@ -234,7 +235,7 @@ func (s *Service) getUserHistory(userID string) (*UserHistory, error) {
 
 	// 获取收藏的菜谱（最近30个）
 	var favorites []models.Favorite
-	err := s.db.Where("user_id = ?", userID).
+	err := db.Where("user_id = ?", userID).
 		Order("created_at DESC").
 		Limit(30).
 		Find(&favorites).Error
@@ -249,10 +250,10 @@ func (s *Service) getUserHistory(userID string) (*UserHistory, error) {
 		}
 
 		var recipes []models.Recipe
-		s.db.Where("recipe_id IN ?", favoriteIDs).Find(&recipes)
+		db.Where("recipe_id IN ?", favoriteIDs).Find(&recipes)
 
 		// 填充标签
-		if err := s.fillTags(recipes); err != nil {
+		if err := s.fillTags(ctx, recipes); err != nil {
 			logger.Errorf("[Recommend] 填充收藏菜谱标签失败: %v", err)
 		}
 
@@ -292,9 +293,9 @@ type candidateRecipe struct {
 }
 
 // getLLMRecommendations 使用 LLM 生成推荐
-func (s *Service) getLLMRecommendations(recCtx *recommendContext, userHistory *UserHistory, limit int, excludeIDs []string) (*LLMRecommendation, error) {
+func (s *Service) getLLMRecommendations(ctx context.Context, recCtx *recommendContext, userHistory *UserHistory, limit int, excludeIDs []string) (*LLMRecommendation, error) {
 	// 1. 获取候选菜谱
-	candidatesJSON, err := s.fetchCandidates(excludeIDs)
+	candidatesJSON, err := s.fetchCandidates(ctx, excludeIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -307,13 +308,13 @@ func (s *Service) getLLMRecommendations(recCtx *recommendContext, userHistory *U
 	messages := s.initLLMMessages(prompt)
 
 	// 4. 多轮对话循环
-	return s.runLLMConversation(s.model, messages, tools)
+	return s.runLLMConversation(ctx, s.model, messages, tools)
 }
 
 // fetchCandidates 获取候选菜谱并序列化为 JSON
-func (s *Service) fetchCandidates(excludeIDs []string) (string, error) {
+func (s *Service) fetchCandidates(ctx context.Context, excludeIDs []string) (string, error) {
 	var allRecipes []models.Recipe
-	query := s.db.Select("recipe_id, name, category, description, difficulty, total_time_minutes")
+	query := s.db.WithContext(ctx).Select("recipe_id, name, category, description, difficulty, total_time_minutes")
 	if len(excludeIDs) > 0 {
 		query = query.Where("recipe_id NOT IN ?", excludeIDs)
 	}
@@ -321,7 +322,7 @@ func (s *Service) fetchCandidates(excludeIDs []string) (string, error) {
 		return "", err
 	}
 
-	if err := s.fillTags(allRecipes); err != nil {
+	if err := s.fillTags(ctx, allRecipes); err != nil {
 		logger.Errorf("[Recommend] 填充候选菜谱标签失败: %v", err)
 	}
 
@@ -397,7 +398,7 @@ func (s *Service) initLLMMessages(prompt string) []openai.ChatCompletionMessage 
 }
 
 // runLLMConversation 运行 LLM 多轮对话
-func (s *Service) runLLMConversation(model string, messages []openai.ChatCompletionMessage, tools []openai.Tool) (*LLMRecommendation, error) {
+func (s *Service) runLLMConversation(ctx context.Context, model string, messages []openai.ChatCompletionMessage, tools []openai.Tool) (*LLMRecommendation, error) {
 	logger.Infof("[Recommend] 调用 LLM - Prompt 长度: %d", len(messages[1].Content))
 
 	maxIterations := 5
@@ -406,7 +407,7 @@ func (s *Service) runLLMConversation(model string, messages []openai.ChatComplet
 
 		logger.Infof("[Recommend] LLM 请求（第 %d 轮）- Model: %s, Messages: %d", i+1, model, len(messages))
 
-		resp, err := s.llmClient.CreateChatCompletion(context.Background(), req)
+		resp, err := s.llmClient.CreateChatCompletion(ctx, req)
 		if err != nil {
 			return nil, s.handleLLMError(model, err)
 		}
@@ -420,7 +421,7 @@ func (s *Service) runLLMConversation(model string, messages []openai.ChatComplet
 
 		// 处理工具调用
 		if len(choice.Message.ToolCalls) > 0 {
-			toolMessages := s.handleToolCalls(choice.Message.ToolCalls)
+			toolMessages := s.handleToolCalls(ctx, choice.Message.ToolCalls)
 			messages = append(messages, toolMessages...)
 			continue
 		}
@@ -471,7 +472,7 @@ func (s *Service) handleLLMError(model string, err error) error {
 }
 
 // handleToolCalls 处理工具调用
-func (s *Service) handleToolCalls(toolCalls []openai.ToolCall) []openai.ChatCompletionMessage {
+func (s *Service) handleToolCalls(ctx context.Context, toolCalls []openai.ToolCall) []openai.ChatCompletionMessage {
 	logger.Infof("[Recommend] LLM 请求查询菜品详情，调用次数: %d", len(toolCalls))
 
 	var messages []openai.ChatCompletionMessage
@@ -485,7 +486,7 @@ func (s *Service) handleToolCalls(toolCalls []openai.ToolCall) []openai.ChatComp
 			continue
 		}
 
-		details := s.getRecipeDetails(ids)
+		details := s.getRecipeDetails(ctx, ids)
 		detailsJSON, err := json.Marshal(details, jsontext.WithIndent("  "))
 		if err != nil {
 			logger.Errorf("[Recommend] 序列化菜品详情失败: %v", err)
@@ -584,13 +585,13 @@ func (s *Service) buildRecommendPrompt(recCtx *recommendContext, userHistory *Us
 }
 
 // getRecipeDetails 查询菜品详细信息（用于 function calling）
-func (s *Service) getRecipeDetails(ids []string) []map[string]interface{} {
+func (s *Service) getRecipeDetails(ctx context.Context, ids []string) []map[string]interface{} {
 	if len(ids) == 0 {
 		return []map[string]interface{}{}
 	}
 
 	var recipes []models.Recipe
-	err := s.db.Select("recipe_id, name, category, description, difficulty, total_time_minutes, prep_time_minutes, cook_time_minutes").
+	err := s.db.WithContext(ctx).Select("recipe_id, name, category, description, difficulty, total_time_minutes, prep_time_minutes, cook_time_minutes").
 		Where("recipe_id IN ?", ids).
 		Find(&recipes).Error
 	if err != nil {
@@ -598,7 +599,7 @@ func (s *Service) getRecipeDetails(ids []string) []map[string]interface{} {
 		return []map[string]interface{}{}
 	}
 
-	if err := s.fillTags(recipes); err != nil {
+	if err := s.fillTags(ctx, recipes); err != nil {
 		logger.Errorf("[Recommend] 填充菜品详情标签失败: %v", err)
 	}
 
@@ -639,18 +640,18 @@ func (s *Service) getRecipeDetails(ids []string) []map[string]interface{} {
 }
 
 // queryRecipesByIDs 根据 ID 查询菜谱
-func (s *Service) queryRecipesByIDs(ids []string) ([]models.Recipe, error) {
+func (s *Service) queryRecipesByIDs(ctx context.Context, ids []string) ([]models.Recipe, error) {
 	if len(ids) == 0 {
 		return []models.Recipe{}, nil
 	}
 
 	var recipes []models.Recipe
-	err := s.db.Where("recipe_id IN ?", ids).Find(&recipes).Error
+	err := s.db.WithContext(ctx).Where("recipe_id IN ?", ids).Find(&recipes).Error
 	return recipes, err
 }
 
 // fillTags 填充菜谱的标签信息（内存组装，避免 JOIN）
-func (s *Service) fillTags(recipes []models.Recipe) error {
+func (s *Service) fillTags(ctx context.Context, recipes []models.Recipe) error {
 	if len(recipes) == 0 {
 		return nil
 	}
@@ -662,7 +663,8 @@ func (s *Service) fillTags(recipes []models.Recipe) error {
 
 	// 1. 查询关联表（不 JOIN，避免连表查询）
 	var recipeTags []models.RecipeTag
-	if err := s.db.Where("recipe_id IN ?", recipeIDs).Find(&recipeTags).Error; err != nil {
+	db := s.db.WithContext(ctx)
+	if err := db.Where("recipe_id IN ?", recipeIDs).Find(&recipeTags).Error; err != nil {
 		return err
 	}
 
@@ -680,7 +682,7 @@ func (s *Service) fillTags(recipes []models.Recipe) error {
 	// 3. 按 recipe_id 分组组装（从缓存获取标签定义）
 	recipeTagsMap := make(map[string][]models.Tag)
 	for _, rt := range recipeTags {
-		tag, err := tagCache.Get(rt.TagType, rt.TagValue, s.db)
+		tag, err := tagCache.Get(rt.TagType, rt.TagValue, db)
 		if err == nil {
 			recipeTagsMap[rt.RecipeID] = append(recipeTagsMap[rt.RecipeID], *tag)
 		}

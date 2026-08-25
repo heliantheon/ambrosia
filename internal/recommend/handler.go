@@ -101,7 +101,7 @@ func (h *Handler) GetRecommendations(c *gin.Context) {
 		return
 	}
 
-	result, err := h.service.GetRecommendations(ctx, limit)
+	result, err := h.service.GetRecommendations(c.Request.Context(), ctx, limit)
 	if err != nil {
 		logger.Errorf("[RecommendHandler] 获取推荐失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "服务器内部错误"})

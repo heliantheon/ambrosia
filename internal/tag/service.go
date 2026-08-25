@@ -1,6 +1,7 @@
 package tag
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -28,15 +29,15 @@ type TagValue struct {
 // ==================== 标签定义相关（t_tag 表）====================
 
 // GetTagByValue 根据 value 和 type 获取标签定义（懒加载：查询一条缓存一条）
-func (s *Service) GetTagByValue(value string, tagType models.TagType) (*models.Tag, error) {
+func (s *Service) GetTagByValue(ctx context.Context, value string, tagType models.TagType) (*models.Tag, error) {
 	cache := getTagCache()
-	return cache.Get(tagType, value, s.db)
+	return cache.Get(tagType, value, s.db.WithContext(ctx))
 }
 
 // GetTagsByType 根据类型获取所有标签定义（懒加载）
-func (s *Service) GetTagsByType(tagType models.TagType) ([]models.Tag, error) {
+func (s *Service) GetTagsByType(ctx context.Context, tagType models.TagType) ([]models.Tag, error) {
 	cache := getTagCache()
-	tagPtrs, err := cache.GetByType(tagType, s.db)
+	tagPtrs, err := cache.GetByType(tagType, s.db.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +53,9 @@ func (s *Service) GetTagsByType(tagType models.TagType) ([]models.Tag, error) {
 }
 
 // GetAllTags 获取所有标签定义（按类型分组，懒加载）
-func (s *Service) GetAllTags() (map[models.TagType][]models.Tag, error) {
+func (s *Service) GetAllTags(ctx context.Context) (map[models.TagType][]models.Tag, error) {
 	cache := getTagCache()
-	tagPtrsMap, err := cache.GetAll(s.db)
+	tagPtrsMap, err := cache.GetAll(s.db.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -71,17 +72,18 @@ func (s *Service) GetAllTags() (map[models.TagType][]models.Tag, error) {
 }
 
 // CreateTag 创建标签定义（如果不存在）
-func (s *Service) CreateTag(value string, label string, tagType models.TagType) (*models.Tag, error) {
+func (s *Service) CreateTag(ctx context.Context, value string, label string, tagType models.TagType) (*models.Tag, error) {
 	cache := getTagCache()
+	db := s.db.WithContext(ctx)
 
 	// 先检查缓存（懒加载）
-	if tag, err := cache.Get(tagType, value, s.db); err == nil {
+	if tag, err := cache.Get(tagType, value, db); err == nil {
 		return tag, nil // 已存在，直接返回
 	}
 
 	// 检查数据库
 	var existing models.Tag
-	err := s.db.Where("type = ? AND value = ?", tagType, value).First(&existing).Error
+	err := db.Where("type = ? AND value = ?", tagType, value).First(&existing).Error
 	if err == nil {
 		// 已存在，设置缓存
 		cache.Set(&existing)
@@ -97,7 +99,7 @@ func (s *Service) CreateTag(value string, label string, tagType models.TagType) 
 		Label: label,
 		Type:  tagType,
 	}
-	if err := s.db.Create(&tag).Error; err != nil {
+	if err := db.Create(&tag).Error; err != nil {
 		return nil, err
 	}
 
@@ -107,19 +109,20 @@ func (s *Service) CreateTag(value string, label string, tagType models.TagType) 
 }
 
 // UpdateTag 更新标签定义（延迟双删策略）
-func (s *Service) UpdateTag(value string, label string, tagType models.TagType) error {
+func (s *Service) UpdateTag(ctx context.Context, value string, label string, tagType models.TagType) error {
 	cache := getTagCache()
+	db := s.db.WithContext(ctx)
 
 	// 延迟双删策略：第一次删除缓存
 	cache.Delete(tagType, value)
 
 	// 更新数据库
 	var tag models.Tag
-	if err := s.db.Where("type = ? AND value = ?", tagType, value).First(&tag).Error; err != nil {
+	if err := db.Where("type = ? AND value = ?", tagType, value).First(&tag).Error; err != nil {
 		return fmt.Errorf("标签不存在: %s", value)
 	}
 
-	result := s.db.Model(&tag).Update("label", label)
+	result := db.Model(&tag).Update("label", label)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -134,15 +137,16 @@ func (s *Service) UpdateTag(value string, label string, tagType models.TagType) 
 }
 
 // DeleteTag 删除标签定义（延迟双删策略）
-func (s *Service) DeleteTag(value string, tagType models.TagType) error {
+func (s *Service) DeleteTag(ctx context.Context, value string, tagType models.TagType) error {
 	cache := getTagCache()
+	db := s.db.WithContext(ctx)
 
 	// 延迟双删策略：第一次删除缓存
 	cache.Delete(tagType, value)
 
 	// 检查是否有菜谱关联
 	var count int64
-	s.db.Model(&models.RecipeTag{}).
+	db.Model(&models.RecipeTag{}).
 		Where("tag_value = ? AND tag_type = ?", value, tagType).
 		Count(&count)
 	if count > 0 {
@@ -150,7 +154,7 @@ func (s *Service) DeleteTag(value string, tagType models.TagType) error {
 	}
 
 	// 删除数据库记录
-	result := s.db.Where("type = ? AND value = ?", tagType, value).
+	result := db.Where("type = ? AND value = ?", tagType, value).
 		Delete(&models.Tag{})
 
 	if result.Error != nil {
@@ -169,10 +173,11 @@ func (s *Service) DeleteTag(value string, tagType models.TagType) error {
 // ==================== 菜谱标签关联相关（t_recipe_tag 表）====================
 
 // GetTagsByRecipe 获取菜谱的所有标签（内存组装）
-func (s *Service) GetTagsByRecipe(recipeID string) ([]models.Tag, error) {
+func (s *Service) GetTagsByRecipe(ctx context.Context, recipeID string) ([]models.Tag, error) {
+	db := s.db.WithContext(ctx)
 	// 1. 查询关联表
 	var recipeTags []models.RecipeTag
-	if err := s.db.Where("recipe_id = ?", recipeID).Find(&recipeTags).Error; err != nil {
+	if err := db.Where("recipe_id = ?", recipeID).Find(&recipeTags).Error; err != nil {
 		return nil, err
 	}
 
@@ -190,7 +195,7 @@ func (s *Service) GetTagsByRecipe(recipeID string) ([]models.Tag, error) {
 	cache := getTagCache()
 	result := make([]models.Tag, 0, len(recipeTags))
 	for _, rt := range recipeTags {
-		if tag, err := cache.Get(rt.TagType, rt.TagValue, s.db); err == nil {
+		if tag, err := cache.Get(rt.TagType, rt.TagValue, db); err == nil {
 			result = append(result, *tag)
 		}
 	}
@@ -199,10 +204,11 @@ func (s *Service) GetTagsByRecipe(recipeID string) ([]models.Tag, error) {
 }
 
 // GetTagsByRecipeAndType 按类型获取某菜谱的标签（内存组装）
-func (s *Service) GetTagsByRecipeAndType(recipeID string, tagType models.TagType) ([]models.Tag, error) {
+func (s *Service) GetTagsByRecipeAndType(ctx context.Context, recipeID string, tagType models.TagType) ([]models.Tag, error) {
+	db := s.db.WithContext(ctx)
 	// 1. 查询关联表
 	var recipeTags []models.RecipeTag
-	if err := s.db.Where("recipe_id = ? AND tag_type = ?", recipeID, tagType).Find(&recipeTags).Error; err != nil {
+	if err := db.Where("recipe_id = ? AND tag_type = ?", recipeID, tagType).Find(&recipeTags).Error; err != nil {
 		return nil, err
 	}
 
@@ -214,7 +220,7 @@ func (s *Service) GetTagsByRecipeAndType(recipeID string, tagType models.TagType
 	cache := getTagCache()
 	result := make([]models.Tag, 0, len(recipeTags))
 	for _, rt := range recipeTags {
-		if tag, err := cache.Get(rt.TagType, rt.TagValue, s.db); err == nil {
+		if tag, err := cache.Get(rt.TagType, rt.TagValue, db); err == nil {
 			result = append(result, *tag)
 		}
 	}
@@ -223,16 +229,17 @@ func (s *Service) GetTagsByRecipeAndType(recipeID string, tagType models.TagType
 }
 
 // AddTagToRecipe 为菜谱添加标签（内存组装）
-func (s *Service) AddTagToRecipe(recipeID string, tagValue string, tagType models.TagType) error {
+func (s *Service) AddTagToRecipe(ctx context.Context, recipeID string, tagValue string, tagType models.TagType) error {
+	db := s.db.WithContext(ctx)
 	// 1. 确保标签定义存在
-	_, err := s.GetTagByValue(tagValue, tagType)
+	_, err := s.GetTagByValue(ctx, tagValue, tagType)
 	if err != nil {
 		return fmt.Errorf("标签不存在: %s (type: %s)", tagValue, tagType)
 	}
 
 	// 2. 检查关联是否已存在
 	var existing models.RecipeTag
-	err = s.db.Where("recipe_id = ? AND tag_value = ? AND tag_type = ?", recipeID, tagValue, tagType).
+	err = db.Where("recipe_id = ? AND tag_value = ? AND tag_type = ?", recipeID, tagValue, tagType).
 		First(&existing).Error
 	if err == nil {
 		return nil // 已存在，直接返回
@@ -247,12 +254,12 @@ func (s *Service) AddTagToRecipe(recipeID string, tagValue string, tagType model
 		TagValue: tagValue,
 		TagType:  tagType,
 	}
-	return s.db.Create(&recipeTag).Error
+	return db.Create(&recipeTag).Error
 }
 
 // RemoveTagFromRecipe 移除菜谱的标签
-func (s *Service) RemoveTagFromRecipe(recipeID string, tagValue string, tagType models.TagType) error {
-	result := s.db.Where("recipe_id = ? AND tag_value = ? AND tag_type = ?", recipeID, tagValue, tagType).
+func (s *Service) RemoveTagFromRecipe(ctx context.Context, recipeID string, tagValue string, tagType models.TagType) error {
+	result := s.db.WithContext(ctx).Where("recipe_id = ? AND tag_value = ? AND tag_type = ?", recipeID, tagValue, tagType).
 		Delete(&models.RecipeTag{})
 
 	if result.Error != nil {
@@ -265,20 +272,20 @@ func (s *Service) RemoveTagFromRecipe(recipeID string, tagValue string, tagType 
 }
 
 // DeleteRecipeTags 删除菜谱的所有标签
-func (s *Service) DeleteRecipeTags(recipeID string) error {
-	return s.db.Where("recipe_id = ?", recipeID).Delete(&models.RecipeTag{}).Error
+func (s *Service) DeleteRecipeTags(ctx context.Context, recipeID string) error {
+	return s.db.WithContext(ctx).Where("recipe_id = ?", recipeID).Delete(&models.RecipeTag{}).Error
 }
 
 // DeleteRecipeTagsByType 删除菜谱某类型的标签
-func (s *Service) DeleteRecipeTagsByType(recipeID string, tagType models.TagType) error {
-	return s.db.Where("recipe_id = ? AND tag_type = ?", recipeID, tagType).
+func (s *Service) DeleteRecipeTagsByType(ctx context.Context, recipeID string, tagType models.TagType) error {
+	return s.db.WithContext(ctx).Where("recipe_id = ? AND tag_type = ?", recipeID, tagType).
 		Delete(&models.RecipeTag{}).Error
 }
 
 // GetRecipesByTagValue 获取包含某标签的所有菜谱 ID（内存组装）
-func (s *Service) GetRecipesByTagValue(value string) ([]string, error) {
+func (s *Service) GetRecipesByTagValue(ctx context.Context, value string) ([]string, error) {
 	var recipeIDs []string
-	err := s.db.Model(&models.RecipeTag{}).
+	err := s.db.WithContext(ctx).Model(&models.RecipeTag{}).
 		Where("tag_value = ?", value).
 		Distinct("recipe_id").
 		Pluck("recipe_id", &recipeIDs).Error
@@ -286,9 +293,9 @@ func (s *Service) GetRecipesByTagValue(value string) ([]string, error) {
 }
 
 // GetRecipesByTagType 获取包含某类型标签的所有菜谱 ID（内存组装）
-func (s *Service) GetRecipesByTagType(tagType models.TagType) ([]string, error) {
+func (s *Service) GetRecipesByTagType(ctx context.Context, tagType models.TagType) ([]string, error) {
 	var recipeIDs []string
-	err := s.db.Model(&models.RecipeTag{}).
+	err := s.db.WithContext(ctx).Model(&models.RecipeTag{}).
 		Where("tag_type = ?", tagType).
 		Distinct("recipe_id").
 		Pluck("recipe_id", &recipeIDs).Error
@@ -299,8 +306,8 @@ func (s *Service) GetRecipesByTagType(tagType models.TagType) ([]string, error) 
 
 // GetDistinctTagValues 获取所有去重的标签值
 // 选项类型（taboo/allergy）只返回选项；标签类型返回所有标签
-func (s *Service) GetDistinctTagValues(tagType models.TagType) ([]TagValue, error) {
-	tags, err := s.GetTagsByType(tagType)
+func (s *Service) GetDistinctTagValues(ctx context.Context, tagType models.TagType) ([]TagValue, error) {
+	tags, err := s.GetTagsByType(ctx, tagType)
 	if err != nil {
 		return nil, err
 	}
@@ -313,18 +320,18 @@ func (s *Service) GetDistinctTagValues(tagType models.TagType) ([]TagValue, erro
 }
 
 // GetOptions 获取选项列表（用于用户偏好设置）
-func (s *Service) GetOptions(tagType models.TagType) ([]TagValue, error) {
+func (s *Service) GetOptions(ctx context.Context, tagType models.TagType) ([]TagValue, error) {
 	// 选项类型只返回选项
 	if tagType != models.TagTypeTaboo && tagType != models.TagTypeAllergy {
 		return nil, fmt.Errorf("无效的选项类型: %s", tagType)
 	}
 
-	return s.GetDistinctTagValues(tagType)
+	return s.GetDistinctTagValues(ctx, tagType)
 }
 
 // GetTagsByRecipe 获取菜谱的所有标签（返回 TagValue，兼容旧接口）
-func (s *Service) GetTagsByRecipeAsTagValue(recipeID string) ([]TagValue, error) {
-	tags, err := s.GetTagsByRecipe(recipeID)
+func (s *Service) GetTagsByRecipeAsTagValue(ctx context.Context, recipeID string) ([]TagValue, error) {
+	tags, err := s.GetTagsByRecipe(ctx, recipeID)
 	if err != nil {
 		return nil, err
 	}
@@ -337,8 +344,8 @@ func (s *Service) GetTagsByRecipeAsTagValue(recipeID string) ([]TagValue, error)
 }
 
 // GetTagsByRecipeAndType 按类型获取某菜谱的标签（返回 TagValue，兼容旧接口）
-func (s *Service) GetTagsByRecipeAndTypeAsTagValue(recipeID string, tagType models.TagType) ([]TagValue, error) {
-	tags, err := s.GetTagsByRecipeAndType(recipeID, tagType)
+func (s *Service) GetTagsByRecipeAndTypeAsTagValue(ctx context.Context, recipeID string, tagType models.TagType) ([]TagValue, error) {
+	tags, err := s.GetTagsByRecipeAndType(ctx, recipeID, tagType)
 	if err != nil {
 		return nil, err
 	}
@@ -352,49 +359,49 @@ func (s *Service) GetTagsByRecipeAndTypeAsTagValue(recipeID string, tagType mode
 
 // AddTag 添加标签（兼容旧接口）
 // 如果 recipeID 为空，只创建标签定义；如果不为空，创建标签定义并关联到菜谱
-func (s *Service) AddTag(recipeID string, value string, label string, tagType models.TagType) error {
+func (s *Service) AddTag(ctx context.Context, recipeID string, value string, label string, tagType models.TagType) error {
 	// 1. 确保标签定义存在
-	_, err := s.CreateTag(value, label, tagType)
+	_, err := s.CreateTag(ctx, value, label, tagType)
 	if err != nil {
 		return err
 	}
 
 	// 2. 如果提供了 recipeID，创建关联
 	if recipeID != "" {
-		return s.AddTagToRecipe(recipeID, value, tagType)
+		return s.AddTagToRecipe(ctx, recipeID, value, tagType)
 	}
 
 	return nil
 }
 
 // AddOption 添加选项（后台管理用）
-func (s *Service) AddOption(value string, label string, tagType models.TagType) error {
+func (s *Service) AddOption(ctx context.Context, value string, label string, tagType models.TagType) error {
 	// 选项类型验证
 	if tagType != models.TagTypeTaboo && tagType != models.TagTypeAllergy {
 		return fmt.Errorf("无效的选项类型: %s", tagType)
 	}
 
-	_, err := s.CreateTag(value, label, tagType)
+	_, err := s.CreateTag(ctx, value, label, tagType)
 	return err
 }
 
 // UpdateOption 更新选项
-func (s *Service) UpdateOption(value string, label string, tagType models.TagType) error {
+func (s *Service) UpdateOption(ctx context.Context, value string, label string, tagType models.TagType) error {
 	// 选项类型验证
 	if tagType != models.TagTypeTaboo && tagType != models.TagTypeAllergy {
 		return fmt.Errorf("无效的选项类型: %s", tagType)
 	}
 
-	return s.UpdateTag(value, label, tagType)
+	return s.UpdateTag(ctx, value, label, tagType)
 }
 
 // DeleteOption 删除选项（需要检查是否有用户使用）
-func (s *Service) DeleteOption(value string, tagType models.TagType) error {
+func (s *Service) DeleteOption(ctx context.Context, value string, tagType models.TagType) error {
 	// 选项类型验证
 	if tagType != models.TagTypeTaboo && tagType != models.TagTypeAllergy {
 		return fmt.Errorf("无效的选项类型: %s", tagType)
 	}
 
 	// TODO: 检查用户偏好表中是否有用户使用此选项
-	return s.DeleteTag(value, tagType)
+	return s.DeleteTag(ctx, value, tagType)
 }

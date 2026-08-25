@@ -57,15 +57,15 @@ func (h *Handler) ListTags(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "选项类型不支持 recipe_id 参数"})
 				return
 			}
-			results, err = h.service.GetOptions(validType)
+			results, err = h.service.GetOptions(c.Request.Context(), validType)
 		} else {
 			// 标签类型（cuisine/flavor/scene）
 			if recipeID != "" {
 				// 获取特定菜谱的标签
-				results, err = h.service.GetTagsByRecipeAndTypeAsTagValue(recipeID, validType)
+				results, err = h.service.GetTagsByRecipeAndTypeAsTagValue(c.Request.Context(), recipeID, validType)
 			} else {
 				// 获取所有该类型的标签（去重）
-				results, err = h.service.GetDistinctTagValues(validType)
+				results, err = h.service.GetDistinctTagValues(c.Request.Context(), validType)
 			}
 		}
 	} else {
@@ -74,7 +74,7 @@ func (h *Handler) ListTags(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "请指定 type 或 recipe_id"})
 			return
 		}
-		results, err = h.service.GetTagsByRecipeAsTagValue(recipeID)
+		results, err = h.service.GetTagsByRecipeAsTagValue(c.Request.Context(), recipeID)
 	}
 
 	if err != nil {
@@ -112,10 +112,10 @@ func (h *Handler) GetTagsByType(c *gin.Context) {
 
 	// 选项类型（taboo/allergy）只返回选项
 	if tagType == models.TagTypeTaboo || tagType == models.TagTypeAllergy {
-		results, err = h.service.GetOptions(tagType)
+		results, err = h.service.GetOptions(c.Request.Context(), tagType)
 	} else {
 		// 标签类型（cuisine/flavor/scene）返回所有标签（去重）
-		results, err = h.service.GetDistinctTagValues(tagType)
+		results, err = h.service.GetDistinctTagValues(c.Request.Context(), tagType)
 	}
 
 	if err != nil {
@@ -170,7 +170,7 @@ func (h *Handler) CreateTag(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "选项类型仅支持 taboo 和 allergy"})
 			return
 		}
-		err = h.service.AddOption(req.Value, req.Label, tagType)
+		err = h.service.AddOption(c.Request.Context(), req.Value, req.Label, tagType)
 	} else {
 		// 创建菜谱标签（不支持 taboo/allergy）
 		if tagType == models.TagTypeTaboo || tagType == models.TagTypeAllergy {
@@ -178,7 +178,7 @@ func (h *Handler) CreateTag(c *gin.Context) {
 			return
 		}
 		// AddTag 会自动创建标签定义（如果不存在）并关联到菜谱
-		err = h.service.AddTag(req.RecipeID, req.Value, req.Label, tagType)
+		err = h.service.AddTag(c.Request.Context(), req.RecipeID, req.Value, req.Label, tagType)
 	}
 
 	if err != nil {
@@ -231,11 +231,11 @@ func (h *Handler) UpdateTag(c *gin.Context) {
 	var err error
 	if recipeID == "" {
 		// 更新标签定义（选项或标签定义）
-		err = h.service.UpdateTag(value, req.Label, tagType)
+		err = h.service.UpdateTag(c.Request.Context(), value, req.Label, tagType)
 	} else {
 		// 更新菜谱标签：实际上是更新标签定义（因为标签定义是共享的）
 		// 注意：这会影响到所有使用该标签的菜谱
-		err = h.service.UpdateTag(value, req.Label, tagType)
+		err = h.service.UpdateTag(c.Request.Context(), value, req.Label, tagType)
 	}
 
 	if err != nil {
@@ -278,10 +278,10 @@ func (h *Handler) DeleteTag(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "选项类型仅支持 taboo 和 allergy"})
 			return
 		}
-		err = h.service.DeleteOption(value, tagType)
+		err = h.service.DeleteOption(c.Request.Context(), value, tagType)
 	} else {
 		// 删除菜谱的标签关联（不删除标签定义）
-		err = h.service.RemoveTagFromRecipe(recipeID, value, tagType)
+		err = h.service.RemoveTagFromRecipe(c.Request.Context(), recipeID, value, tagType)
 	}
 
 	if err != nil {

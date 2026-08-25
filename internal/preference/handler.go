@@ -33,7 +33,7 @@ func NewHandler(db *gorm.DB) *Handler {
 // @Failure 500 {object} map[string]string
 // @Router /api/preferences [get]
 func (h *Handler) GetOptions(c *gin.Context) {
-	options, err := h.service.GetOptions()
+	options, err := h.service.GetOptions(c.Request.Context())
 	if err != nil {
 		logger.Error("获取偏好选项失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取偏好选项失败"})
@@ -56,7 +56,7 @@ func (h *Handler) GetOptions(c *gin.Context) {
 func (h *Handler) GetUserPreferences(c *gin.Context) {
 	openID := guard.GetTokenContext(c.Request.Context()).AccessToken.OpenID()
 
-	prefs, err := h.service.GetUserPreferences(openID)
+	prefs, err := h.service.GetUserPreferences(c.Request.Context(), openID)
 	if err != nil {
 		logger.Error("获取用户偏好失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户偏好失败"})
@@ -90,13 +90,13 @@ func (h *Handler) UpdateUserPreferences(c *gin.Context) {
 
 	// 验证标签值（从 service 中获取 tagService）
 	tagService := tag.NewService(h.service.GetDB())
-	if err := req.Validate(tagService); err != nil {
+	if err := req.Validate(c.Request.Context(), tagService); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// 更新偏好
-	if err := h.service.UpdateUserPreferences(openID, &req); err != nil {
+	if err := h.service.UpdateUserPreferences(c.Request.Context(), openID, &req); err != nil {
 		logger.Error("更新用户偏好失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新用户偏好失败"})
 		return

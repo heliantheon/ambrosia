@@ -74,7 +74,7 @@ func (h *Handler) AddFavorite(c *gin.Context) {
 		return
 	}
 
-	fav, err := h.service.AddFavorite(openID, req.RecipeID)
+	fav, err := h.service.AddFavorite(c.Request.Context(), openID, req.RecipeID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -97,7 +97,7 @@ func (h *Handler) RemoveFavorite(c *gin.Context) {
 	openID := guard.GetTokenContext(c.Request.Context()).AccessToken.OpenID()
 	recipeID := c.Param("recipe_id")
 
-	if err := h.service.RemoveFavorite(openID, recipeID); err != nil {
+	if err := h.service.RemoveFavorite(c.Request.Context(), openID, recipeID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -117,7 +117,7 @@ func (h *Handler) CheckFavorite(c *gin.Context) {
 	openID := guard.GetTokenContext(c.Request.Context()).AccessToken.OpenID()
 	recipeID := c.Param("recipe_id")
 
-	isFavorite, err := h.service.IsFavorite(openID, recipeID)
+	isFavorite, err := h.service.IsFavorite(c.Request.Context(), openID, recipeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -157,7 +157,7 @@ func (h *Handler) GetFavorites(c *gin.Context) {
 		offset = 0
 	}
 
-	favorites, total, err := h.service.GetFavorites(openID, category, search, limit, offset)
+	favorites, total, err := h.service.GetFavorites(c.Request.Context(), openID, category, search, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -210,7 +210,7 @@ func (h *Handler) BatchCheckFavorites(c *gin.Context) {
 		return
 	}
 
-	favoritedIDs, err := h.service.GetFavoriteRecipeIDs(openID, req.RecipeIDs)
+	favoritedIDs, err := h.service.GetFavoriteRecipeIDs(c.Request.Context(), openID, req.RecipeIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
